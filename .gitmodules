@@ -1,0 +1,3 @@
+[submodule "my-devcontainers"]
+	path = my-devcontainers
+	url = git@github.com:paprikaw/my-devcontainers.git
