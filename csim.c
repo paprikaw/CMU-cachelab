@@ -4,7 +4,7 @@
 #include <stdlib.h>
 #include <stdint.h>
 
-#define INVALID_ADDRESS 0
+#define INVALID_ADDRESS 0xFFFFFFFFFFFFFFFF
 struct cacheAddress
 {
     uint64_t address;
@@ -12,18 +12,9 @@ struct cacheAddress
 };
 typedef struct cacheAddress CACHE_ADDRESS;
 
-void print_help();
-size_t parse_set_index(uint64_t address, short set_bit, short block_bits);
+size_t parse_set_index(uint64_t my_address, short set_bit, short block_bits);
 char cmp_tag(uint64_t source_address, uint64_t target_address, short set_bit, short block_bit);
 size_t LRU_index(CACHE_ADDRESS *set, size_t length);
-// hits:4 misses:5 evictions:3
-
-// • -h: Optional help flag that prints usage info
-// • -v: Optional verbose flag that displays trace info
-// • -s <s>: Number of set index bits (S = 2s is the number of sets)
-// • -E <E>: Associativity (number of lines per set)
-// • -b <b>: Number of block bits (B = 2b is the block size)
-// • -t <tracefile>: Name of the valgrind trace to replay
 
 int main(int argc, char *argv[])
 {
@@ -34,14 +25,15 @@ int main(int argc, char *argv[])
     size_t associativity = 1;  // associativity (每个set中有几个line)
     short block_bit = 0;       // block bits的数量
     char *file_name = NULL;
+    char is_verbose = 0;
     while ((ch = getopt(argc, argv, "hvs:E:b:t:")) != -1)
     {
         switch (ch)
         {
         case 'h':
-            print_help();
             return 0;
         case 'v':
+            is_verbose = 1;
             break;
         case 's':
             if ((set_bit = atoi(optarg)) == 0)
@@ -78,7 +70,6 @@ int main(int argc, char *argv[])
     if (ch == '?' || needed_argument < 4)
     {
         printf("./csim-ref: Missing required command line argument");
-        print_help();
         return 1;
     }
 
@@ -111,18 +102,18 @@ int main(int argc, char *argv[])
     while (fscanf(fs, "%s %lx,%ld\n", access_type, &address, &accessed_byte_size) != EOF)
     {
         current_time++;
+        if (access_type[0] == 'I')
+            continue;
         // 开始检查以address为第一个的总共大小为size的地址是否在内存中
         // address + i是否在cahce中
-        // for (size_t i = 0; i < accessed_byte_size; i++)
-        // {
-        // 本轮的地址
-        uint64_t cur_address = address; // + i;
-        // printf("%s %lx,%ld", access_type, cur_address, accessed_byte_size);
+        if (is_verbose)
+            printf("%s %lx,%ld", access_type, address, accessed_byte_size);
         // 遍历中需要得到的信息
         char is_hit = 0;
-        int64_t empty_address_index = -1;
+        size_t empty_address_index = 0;
+        char is_any_empty = 0;
         // 当前address的set index
-        size_t set_index = parse_set_index(cur_address, set_bit, block_bit);
+        size_t set_index = parse_set_index(address, set_bit, block_bit);
         // 当前的set
         CACHE_ADDRESS *cur_set = set[set_index];
         // 遍历当前set中所有的lines
@@ -131,74 +122,66 @@ int main(int argc, char *argv[])
             uint64_t cache_address = cur_set[i].address;
             if (cache_address == INVALID_ADDRESS)
             {
+                is_any_empty = 1;
                 empty_address_index = i;
-                continue;
+                break;
             }
-            if (cmp_tag(cur_address, cache_address, set_bit, block_bit))
+            if (cmp_tag(address, cache_address, set_bit, block_bit))
             {
                 is_hit = 1;
                 cur_set[i].accessTime = current_time;
                 break;
             }
         }
-
-        if (is_hit)
+        // 判断是否hit
+        if (is_hit == 1)
         {
-            // printf(" hit ");
+            if (is_verbose)
+                printf(" hit ");
             hit++;
         }
         else
         {
-            if (empty_address_index != -1)
+            if (is_any_empty == 1)
             {
-                cur_set[empty_address_index].address = cur_address;
+                cur_set[empty_address_index].address = address;
                 cur_set[empty_address_index].accessTime = current_time;
-                // printf(" miss ");
+                if (is_verbose)
+                    printf(" miss ");
                 miss++;
             }
             else
             {
                 size_t least_used_index = LRU_index(cur_set, associativity);
                 cur_set[least_used_index].accessTime = current_time;
-                cur_set[least_used_index].address = cur_address;
-                // printf(" miss evicted ");
+                cur_set[least_used_index].address = address;
+                if (is_verbose)
+                    printf(" miss eviction ");
                 evict++;
                 miss++;
             }
-            if (access_type[0] == 'M')
-            {
-                // printf("hit ");
-                hit++;
-            }
         }
-        // printf("\n");
+
+        // 如果类型是M的话，需要有其他操作
+        if (access_type[0] == 'M')
+        {
+            if (is_verbose)
+                printf("hit ");
+            hit++;
+        }
+        if (is_verbose)
+            printf("\n");
         //}
     }
     printSummary(hit, miss, evict);
+    fclose(fs);
     free(set);
     return 0;
 }
-
-void print_help()
-{
-    printf("Usage: ./csim-ref [-hv] -s <num> -E <num> -b <num> -t <file>\n"
-           "Options:\n"
-           "  -h         Print this help message.\n"
-           "  -v         Optional verbose flag.\n"
-           "  -s <num>   Number of set index bits.\n"
-           "  -E <num>   Number of lines per set.\n"
-           "  -b <num>   Number of block offset bits.\n"
-           "  -t <file>  Trace file.\n"
-           "Examples:\n"
-           "  linux>  ./csim-ref -s 4 -E 1 -b 4 -t traces/yi.trace\n"
-           "  linux>  ./csim-ref -v -s 8 -E 2 -b 4 -t traces/yi.trace\n");
-    return;
-}
-
-size_t parse_set_index(uint64_t address, short set_bit, short block_bits)
+size_t parse_set_index(uint64_t my_address, short set_bit, short block_bits)
 {
     uint64_t bit_mask = ((1 << set_bit) - 1) << block_bits;
-    return ((address & bit_mask) >> block_bits);
+    return ((my_address & bit_mask) >> block_bits);
 }
 
 char cmp_tag(uint64_t source_address, uint64_t target_address, short set_bit, short block_bit)
@@ -217,6 +200,7 @@ size_t LRU_index(CACHE_ADDRESS *set, size_t length)
     {
         if (set[i].accessTime < least_used_time)
         {
+            least_used_time = set[i].accessTime;
             least_used_index = i;
         }
     }
