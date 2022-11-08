@@ -171,7 +171,6 @@ int main(int argc, char *argv[])
         }
         if (is_verbose)
             printf("\n");
-        //}
     }
     printSummary(hit, miss, evict);
     fclose(fs);
